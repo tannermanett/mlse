@@ -1,0 +1,163 @@
+---
+title: "TFC Renewal Data"
+author: "Tanner Manett"
+date: "2023-05-09"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+#### Load packages into R
+```{r}
+library(tidyverse)
+library(datasets)
+library(rio)
+library(dplyr)
+library(ggplot2)
+```
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Import datasets
+```{r}
+survey_data <- import(
+    "/Users/tmanett/Desktop/Manifest Optimization/MergedOutput.xlsx"
+    )
+
+renewal_data <- import(
+    "/Users/tmanett/Desktop/Manifest Optimization/processed_data_22.csv"
+)
+
+# Rename column in renewal_data to match survey_data
+names(survey_data)[names(survey_data) == "ExternalReferenceExternal.Data.Reference"] <- "acct_id" 
+
+# View data
+View(survey_data)
+View(renewal_data)
+
+# Merge the two datasets
+merged_data <- merge(survey_data, renewal_data, by = "acct_id", all = FALSE)
+merged_data <- merged_data[!duplicated(merged_data$acct_id),]
+View(merged_data)
+
+table(table(merged_data$acct_id))
+```
+## Season ticket members who intend on renewing 
+```{r}
+#Lets see how many people intended on renewing
+renewal_survey_counts <- merged_data %>%
+  filter(!is.na(Q6Do.you.intend.to.renew.your.Toronto.FC.season.ticket.membership.for.the.2023.season.)) %>% 
+  group_by(Q6Do.you.intend.to.renew.your.Toronto.FC.season.ticket.membership.for.the.2023.season.) %>% 
+  summarise(
+    n = n()
+  ) %>%
+  mutate(percent = scales::percent(n / sum(n)))
+
+renewal_survey_counts
+```
+```{r}
+#Plot counts for intention of renewal
+ggplot(renewal_survey_counts, aes(x="", y=n, fill=Q6Do.you.intend.to.renew.your.Toronto.FC.season.ticket.membership.for.the.2023.season.)) + 
+  geom_bar(width = 1, stat = "identity") +
+  geom_text(aes(label = percent), position = position_stack(vjust = 0.5), size = 4) + 
+  coord_polar(theta = "y", start = 0) +
+  scale_fill_manual(name="", values=c("Yes"="#B91037", "Undecided"="#2B383E", "No"="#FFFFFF")) + 
+  theme_void() +
+  labs(title = "Ticket Renewal Survey Responses",
+       subtitle = paste0("n = ", nrow(merged_data)),
+       caption = "Source: Toronto FC")
+```
+## Season ticket members who actually renewed there membership
+```{r}
+#Lets see how many people actually renewed
+real_renewal_counts <- merged_data %>%
+  filter(!is.na(renewed)) %>%
+  group_by(renewed) %>%
+  summarise(
+    n = n()
+  ) %>%
+  mutate(percent = scales::percent(n / sum(n)))
+
+real_renewal_counts
+```
+```{r}
+#Plotting people who actually renewed there membership
+ggplot(real_renewal_counts, aes(x="", y=n, fill=renewed)) + 
+  geom_bar(width = 1, stat = "identity") +
+  geom_text(aes(label = percent), position = position_stack(vjust = 0.5), size = 4) + 
+  coord_polar(theta = "y", start = 0) +
+  scale_fill_manual(name="", values=c("TRUE"="#B91037", "FALSE"="#2B383E")) + 
+  theme_void() +
+  labs(title = "Actual Membership Renewals",
+       subtitle = paste0("n = ", nrow(merged_data)),
+       caption = "Source: Toronto FC")
+```
+```{r}
+# Filter data for respondents who intended to renew
+renewal_intended <- merged_data %>%
+  filter(Q6Do.you.intend.to.renew.your.Toronto.FC.season.ticket.membership.for.the.2023.season. != "NA", !is.na(renewed)) %>%
+  group_by(Q6Do.you.intend.to.renew.your.Toronto.FC.season.ticket.membership.for.the.2023.season., renewed) %>%
+  summarise(count = n()) 
+
+renewal_intended
+```
+
+
+## Cross-reference people who said they were going to renew with their actual renewal status
+```{r}
+# Filter data for respondents who intended to renew
+round(prop.table(table(merged_data$Q6Do.you.intend.to.renew.your.Toronto.FC.season.ticket.membership.for.the.2023.season., merged_data$renewed, exclude = 'NA'), 1) * 100, 2)
+```
+```{r}
+# Create a data frame with the desired table structure
+renewal_table <- data.frame(
+  Intent = c("Will renew", "Undecided", "Will not"),
+  Renewed = c("98.68%", '89.68%','52.08%'),
+  `Did not` = c('1.32%', '10.32%', '47.92%'),
+  check.names = FALSE
+)
+
+renewal_table
+```
+
+```{r}
+# Create a bar plot
+ggplot(renewal_intended, aes(x = Q6Do.you.intend.to.renew.your.Toronto.FC.season.ticket.membership.for.the.2023.season., y = count, fill = renewed)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Intention to Renew", y = "Count", fill = "Renewal Status") +
+  scale_fill_manual(values = c("TRUE" = "#B91037", "FALSE" = "#2B383E")) +
+  theme_minimal()
+```
+
+## Chi-square test
+
+A chi-square test is a statistical test used to determine if there is a significant association between two categorical variables. It compares the observed frequencies of each category with the expected frequencies that would be expected if the variables were independent. The test assesses whether the observed and expected frequencies differ significantly, indicating that there may be a relationship between the variables.
+```{r}
+# Create a contingency table of the variables
+contingency_table <- table(merged_data$Q6Do.you.intend.to.renew.your.Toronto.FC.season.ticket.membership.for.the.2023.season., merged_data$renewed)
+contingency_table
+# Perform the chi-square test
+chi_square_result <- chisq.test(contingency_table)
+
+# Print the test results
+print(chi_square_result)
+```
+
+Here's the breakdown of the numbers:
+
+X-squared: The value of 484.31 represents the chi-squared test statistic. It measures the discrepancy between the observed frequencies in the contingency table and the expected frequencies under the assumption of independence between the variables. A larger chi-squared value indicates a greater deviation from independence.
+
+df: The value of 3 represents the degrees of freedom associated with the chi-squared test. In this case, the degrees of freedom are calculated as (number of rows - 1) * (number of columns - 1) in the contingency table. It reflects the number of independent pieces of information used to estimate the expected frequencies.
+
+p-value: The p-value is a measure of the statistical significance of the chi-squared test. In this case, the p-value is reported as < 2.2e-16, which means it is extremely small (less than 2.2 * 10^(-16)). This indicates strong evidence against the null hypothesis of independence between the variables. In other words, the p-value suggests that there is a significant association between the "Q6Do.you.intend.to.renew.your.Toronto.FC.season.ticket.membership.for.the.2023.season" and "renewed" variables.
+
+Overall, the results indicate a significant relationship between the two variables, suggesting that the intention to renew and the actual renewal status are associated.
+
+```{r}
+merged_data %>%
+  select(acct_id, Q6Do.you.intend.to.renew.your.Toronto.FC.season.ticket.membership.for.the.2023.season., renewed)%>%
+  arrange(desc(Q6Do.you.intend.to.renew.your.Toronto.FC.season.ticket.membership.for.the.2023.season.)) %>%
+  export("merged_TFC_data.csv", format = "csv")
+```
+

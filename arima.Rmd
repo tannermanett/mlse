@@ -1,0 +1,254 @@
+---
+title: "ARIMA Model Predicting Future Delta of Tickets at Face Value vs Secondary Market at Scotiabank Arena"
+author: "Tanner Manett"
+date: "2023-06-08"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Difference Between Stationary and Non-Stationary Variables
+In the context of time series analysis, the terms __"stationary"__ and __"non-stationary"__ refer to the behavior of a variable over time. Understanding this distinction is crucial when using models like ARIMA. Now, why is this important for building ARIMA model? The "I" in ARIMA represnets the integrated compnent, accounting for differencing to transform non-stationary series into stationary ones. Therfore, we need to now if our varibale is statioanry or non-stationary so we know if we need to take the firt difference or not.
+
+The differencing operation in ARIMA removes the trend or other non-stationary patterns, making the series stationary. ARIMA models assume that the underlying time series is stationary or approximately stationary after differencing. By making the series stationary, ARIMA models can capture the autocorrelation and predict future values based on the past behavior of the series.
+
+#### Stationary Variables
+* Frequently returns to its mean 
+* Temporary impact doesn't last forever
+
+#### Non-Stationary Variables 
+* Does not frequently return to its mean 
+* Temporary shock has permanent impact
+
+## What is ARIMA
+ARIMA stands for AutoRegressive Integrated Moving Average. The model combines three components: 
+1. Autoregression (AR) - captures the relationship between an observation and a lagged value
+2. Differencing (I) - transforms non-stationary series into stationary ones
+3. Moving Average (MA) - Considers the error terms and their relationship to past observations
+
+**ARIMA models** use the historical behavior of a time series to predict future values, making them valuable tools for forecasting in various domains.
+
+ARIMA models are denoted by (P,D,Q). Our first step is to find D, which is the intregrated part of the model.
+
+_D = the number of times a series must be differenced to be made stationary_
+
+* If \(D = 0\), the series is stationary \(I(0)\).
+* If \(D = 0\), the series is stationary \(I(0)\).
+* D can also be a fraction 
+
+##### Example: ARIMA (1,0,1)
+
+\[Y_t = \phi_1 \cdot Y_{t-1} + \theta_1 \cdot \varepsilon_{t-1} + \varepsilon_t\]
+
+* Y_t represnts the value of the time series at time 't'
+* φ₁ is the autoregressive coefficient
+* Y_{t-1} represents the value of the time series at the previous time step
+* θ₁ is the moving average coefficient
+* ε_{t-1} represents the error term at the previous time step
+* ε_t represents the current error term
+
+_P_ tells you how many Y_t variables to include
+_Q_ tells you how many error terms to include
+
+### My Approach to Contructing Models
+With respect to manifest optimization, there are many sections of the arena we are tyring to re-price. Thus, my approach will be as follows:
+
+_1. Individual ARIMA Models:_
+
+In this approach, I would build separate ARIMA models for each seat section. Each model would be trained and fitted specifically for the historical data of that particular section. This approach allows for customization and fine-tuning of the models based on the characteristics and trends observed in each section. You can analyze and forecast prices separately for each section, considering their unique dynamics.
+
+_2. Composite ARIMA Model:_
+
+I will also create a single composite ARIMA model that incorporates data from all seat sections. In this case, I would combine the data from all sections into a single time series dataset and build an ARIMA model based on the aggregated data. This approach assumes that there are common trends and patterns across different sections, and the model captures the overall behavior of ticket prices. I can then generate forecasts for each section based on the composite model, considering any variations or adjustments specific to individual sections.
+
+# Composite ARIMA
+First, I will construct a composite ARIMA model that analyzes ticketing pricing form a holistic view. This can be especially useful if there are limited data points for some seat sections or if certain sections exhibit erratic or unpredictable price movements, a composite model may provide more reliable forecasts by leveraging the combined information.
+
+To start, we are going to look at a time-series plot of the average delta between the face value of a ticket vs the re-sale price on [link](www.ticketmaster.com).
+
+```{r}
+# Load in libraries
+library(datasets)
+library(tidyverse)
+library(rio)
+library(ggplot2)
+
+# Load in ticketing data
+ticketing_data <- import(
+  "C:/Users/tmanett/Desktop/Manifest Optimization/TML Manifest Data.csv"
+  )
+
+# View data in separate window
+View(ticketing_data)
+
+# Transform even_date column from character to date object
+ticketing_data$event_date <- as.Date(ticketing_data$event_date, format = "%m/%d/%Y" )
+
+day_test <- ticketing_data %>%
+  mutate(event_date = as.Date(event_date)) %>%
+  mutate(day = floor_date(event_date, "day")) %>%
+  group_by(day) %>%
+ summarize(resale_price = mean(resale_price))
+
+View(day_test)
+
+ticketing <- ticketing_data %>%
+  mutate(event_date = as.Date(event_date)) %>%
+  mutate(week = floor_date(event_date, "week")) %>%
+  group_by(week) %>%
+  summarize(avg_price_diff = mean(price_diff_perc))
+
+```
+```{r}
+ticketing_data %>%
+  mutate(day = floor_date(event_date, "day")) %>%
+  group_by(day) %>%
+  summarize(avg_resale = mean(resale_price)) %>%
+  ggplot(aes(x = day, y = avg_resale)) +
+  geom_line() +
+  labs(x = "Day", y = "Average Resale", title = "Resale Price per Day") +
+  theme_minimal()
+```
+Off of first glance, it seems that there is no trend in the data, and that the variables seems to regress to its mean. Thus, I could conclude that this dataset is a stationary, and has no unit root. However, an eye test is not enough to come to this conclusion, and we must conduct the necessary statistical testing to come to a real conclusion.
+
+We can also check if there's a trend in this time-series data by doing a OLS regression of a constant and a time trend with % Price Delta as our dependent variable. We will also use robust standard errors. Robust standard errors provide a more reliable estimation of the standard errors of the regression coefficients in the presence of heteroscedasticity. Heteroscedasticity refers to the condition where the variance of the error term in a regression model is not constant across all levels of the independent variables.
+
+```{r}
+# Load the sandwich package for robust standard errors
+library(sandwich)
+
+# Create a time trend variable
+day_test$time_index <- 1:nrow(day_test)
+
+# Create a linear regression model with robust standard errors
+model <- lm(resale_price ~ 1 + time_index, data = day_test)
+
+# Calculate robust standard errors
+robust_se <- sqrt(diag(vcovHC(model, type = "HC1")))
+
+# Display the regression results with robust standard errors
+summary(model)
+
+View(day_test)
+```
+These results suggest that there is a statistically significant relationship between the time trend and the "% price_diff_perc" variable, although the R-squared value indicates that the time trend explains a relatively small portion of the variance in the data.
+
+## Unit Root Tests
+A unit root test, also known as a stationarity test, is a statistical test used to determine if a time series has a unit root or not. A unit root indicates that the series is non-stationary, meaning it has a stochastic trend and does not possess a constant mean or variance over time. On the other hand, if the unit root test rejects the presence of a unit root, it suggests that the series is stationary. This is important, because we need to find out if our variable(s) are stationary or not to make our ARIMA model.
+
+Unit root test the null hypothesis that a series needs to be differenced to be made stationary.Many might think that we simply need to test that I = 1 using a t-test. However, this type of thinking breaks down if our variable is not stationary, as it then does not follow the t-distribution. When I = 0 in our equation, our variable is following the Dickey-Fuller distribution. 
+
+120seasonal dummy variables, etc). Each time we change the deterministics in the testing equation, we get a slightly different distribution of the t-test of the null that .These tests are usually referred to as the  for, as you might suspect,the no-constant (NC), constant (C), and constant and trend (CT) tests. In practice we recognize that the errors in the testing equation could contain some serial correlation(autocorrelation) and we try to control for that by using what’s called the Augmented Dickey-Fuller (ADF) test.
+
+### Types of Unit Root Tests
+There are several types of unit root tests commonly used in econometrics and time series analysis. Here are the following tests we are going to use:
+
+1. Augmented Dickey-Fuller (ADF) Test
+2. Augmented Dickey-Fuller Generalized Least Squares (ADF-GLS) Test
+3. Kwiatkowski-Phillips-Schmidt-Shin (KPSS) Test
+4. Phillips-Perron (PP) Test
+5. Fractional Integration 
+5. LS Unit Root Test
+
+#### Augmemnted Dickey Fuller 
+The ADF (Augmented Dickey-Fuller) test is a statistical test used to determine whether a time series has a unit root or is stationary. It is commonly used in econometrics and time series analysis. The test helps to identify the presence of a trend in the data, which is an indication of non-stationarity.
+
+__Null Hypothesis (H0): >= 0__
+__Alternative Hypothesis (HA): < 0__
+
+The ADF test compares the lagged values of a time series to its current value to determine the presence of a unit root. The concept of lagged values refers to using past observations of a time series as predictors for the current observation. In the ADF test, lagged values are included in the auto regressive model to capture the dependence on past values. The number of lagged values included in the model is determined by the lag order specified in the test. Lagged values help to account for the temporal dynamics and potential autocorrelation in the time series.
+
+How do we decide the amount of lagged values to use in the ADF test? We take the cubed root of the number of observations in our time-series data. We then round that number up to the nearest whole number. 
+
+##### Lags: ADF Test
+_Number of Observations_ = 273
+_Number of Lags_ = `r round((273)^(1/3), 2)`
+                 = 7 lags in ADF test
+                 
+* Thus, we start at the 9th observation (F+2). The lag length, denoted by "F," represents the number of lagged differences included in the test. Adding 2 to "F" accounts for the inclusion of the constant and trend terms in the ADF regression model.*
+
+```{r}
+# Load the "urca" package to do ADF test
+library(urca)
+
+# Subset your data to start from the 9th observation
+subset_data <- day_test[9:nrow(day_test), ]
+
+View(subset_data)
+
+# ADF test with 7 lags, including constant and trend
+adf_result1 <- ur.df(subset_data$resale_price, type = "trend", lags = 7)
+summary(adf_result1)
+
+# ADF test with 7 lags, including constant only
+adf_result2 <- ur.df(subset_data$resale_price, type = "drift", lags = 7)
+summary(adf_result2)
+
+# ADF test with 7 lags, including constant only
+adf_result3 <- ur.df(subset_data$resale_price, type = "none", lags = 7)
+summary(adf_result3)
+```
+The ADF test can be conducted under different regression specifications, including:
+
+* Test with constant and trend (Type: "trend"): This regression specification includes a constant term and a linear trend in the ADF test equation.
+* Test with constant only (Type: "drift"): This regression specification includes a constant term but excludes the linear trend in the ADF test equation.
+* Test without constant and trend (Type: "none"): This regression specification excludes both the constant term and the linear trend in the ADF test equation.
+
+Based on the results, it appears that the null hypothesis of a unit root is rejected in all three tests, suggesting that the time series is stationary. The low p-values and the significant t-values for the lagged values indicate that the inclusion of these terms in the regression equation helps explain the behavior of the variable.
+
+#### Augmemnted Dickey Fuller Generalized Least Squares
+Although the ADF test is telling us that our time-series data does not contain a unit root, it is not as very powerful test. We do have a test that is a little more powerful called the ADF-GLS test. Overall, the ADF-GLS test is a more advanced and reliable method for testing the presence of a unit root and determining the stationarity of a time series. It addresses the limitations of the standard ADF test and provides more accurate and robust results, making it a preferred choice in many empirical applications.
+
+We choose the maximum lag length to include in the augmented version of the test just aswe did with the regular ADF test, and we can include a constant or a trend in the test to see if the series has a unit root.
+
+```{r}
+# ADF-GLS test with trend
+adf_gls_trend <- ur.ers(subset_data$resale_price, type = "DF-GLS", model = "trend", lag.max = 7)
+summary(adf_gls_trend)
+
+# ADF-GLS test without trend
+adf_gls_no_trend <- ur.ers(subset_data$resale_price, type = "DF-GLS", model = "constant", lag.max = 7)
+summary(adf_gls_no_trend)
+
+
+```
+_The output you provided shows the results of the Elliot, Rothenberg, and Stock (ERS) unit root test using the DF-GLS (Dickey-Fuller Generalized Least Squares) method. This test is used to examine whether a time series variable has a unit root (non-stationarity) or not._
+* The output includes the results for two different specifications of the test: one with a detrending of the series with intercept and trend, and the other with a detrending of the series with only an intercept.
+* For each specification, the output provides the estimated coefficients, standard errors, t-values, and p-values for each lagged difference of the variable. The lagged differences represent the differenced series used in the test.
+* The "Signif. codes" section shows the significance levels of the coefficients. The codes "", "", "", ".", and " " represent the significance levels at 0.001, 0.01, 0.05, 0.1, and greater than 0.1, respectively.
+* The "Residual standard error" represents the standard deviation of the residuals, which measures the model's goodness of fit.
+* The "Multiple R-squared" and "Adjusted R-squared" values indicate the proportion of variance explained by the model.
+* The "F-statistic" and its associated p-value provide an overall test of the model's significance.
+* The "Value of test-statistic" represents the computed test statistic for the unit root test.
+* Finally, the "Critical values of DF-GLS" show the critical values corresponding to different significance levels. The computed test statistic is compared against these critical values to determine the rejection or non-rejection of the null hypothesis.
+
+In both specifications, the p-values associated with the lagged differences are very small, indicating strong evidence against the null hypothesis of a unit root. This suggests that the variable being tested is likely stationary after taking the appropriate detrending into account.
+
+#### Kwiatkowski-Phillips-Schmidt-Shin (KPSS) Test: Testing for Stationarity 
+Even though our unit root tests allow us to test the null hypothesis that a series has a unit root, we also need a test with a null hypothesis that a series is stationary. This is the opposite of the unit root hypothesis that a series is not stationary, and has a trend. Hopefully, this type of test would provide confirmatory results leading us to conclude if our data has a unit root or not. If we do not reject the null of a unit root, we should reject the null of stationarity. If we reject the null of a unit root, we should not reject the null of stationarity. However, there are cases in which these tests may contradict each other in which we look to further tests such as fractional integration, which we will discuss later on.
+
+If the series is stationary, this test has a certain distribution – so we compare our calculated values to the critical values, and decide whether to reject the null or not. Just like our ADF test, there is a choice of lag truncation parameter, but instead of taking the cubed root, we take our sample sized raised to the power of 1/4.
+
+##### Lags: KPSS Test
+_Number of Observations_ = 265 (removed F+2 obsv.)
+_Number of Lags_ = `r round((265)^(1/4), 2)`
+                 = 5 lags in KPSS test
+
+
+__Null Hypothesis (H0): Stationary__
+__Alternative Hypothesis (HA): Non-Stationary__
+
+*IF THE CALC. KPSS > CRIT. KPSS, SERIES IS STATIONARY*
+
+```{r}
+#Without time trend
+kpss_test1 <- ur.kpss(subset_data$resale_price, type = "tau", use.lag = 5)
+summary(kpss_test1)
+```
+To interpret the results, you compare the test statistic value with the critical values. If the test statistic is greater than the critical values, it suggests that the series is non-stationary (rejecting the null hypothesis of stationarity). Conversely, if the test statistic is smaller than the critical values, it provides evidence of stationarity (failing to reject the null hypothesis).
+
+In this case, the test statistic value of 0.3736 is greater than all the critical values provided. Therefore, at any typical significance level (10%, 5%, 2.5%, and 1%), we would fail to reject the null hypothesis of stationarity. This suggests that the series being tested may be non-stationary. Thus, we have encounter a contradiction.
+
+Our ADF and ADF-GLS tests are telling us that our time-series is stationary, but our KPSS test is saying our time-series is non-stationary. This conflicting result suggests that the time series may have some complex characteristics, such as a combination of a stationary and non-stationary component, or a trend that is neither completely stationary nor non-stationary.
